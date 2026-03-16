@@ -6,6 +6,7 @@ import { parse } from '@babel/parser'
 import { createDebug } from 'obug'
 import { isolatedDeclarationSync } from 'rolldown/experimental'
 import {
+  filename_js_to_dts,
   filename_to_dts,
   RE_DTS,
   RE_DTS_MAP,
@@ -138,6 +139,19 @@ export function createGeneratePlugin({
           debug('resolved input alias %s -> %s', id, resolvedId)
           inputAliasMap.set(resolvedId, name)
         }
+      } else {
+        for (const id of options.input) {
+          debug('resolving array input %s', id)
+          let resolved = await this.resolve(id)
+          if (!id.startsWith('./')) {
+            resolved ||= await this.resolve(`./${id}`)
+          }
+          const resolvedId = resolved?.id || id
+          // Derive the name from the file path (e.g. "/src/index.ts" -> "index")
+          const name = path.basename(resolvedId).replace(RE_TS, '')
+          debug('resolved array input %s -> %s (name: %s)', id, resolvedId, name)
+          inputAliasMap.set(resolvedId, name)
+        }
       }
     },
 
@@ -155,6 +169,17 @@ export function createGeneratePlugin({
             if (RE_DTS.test(nameTemplate)) {
               return replaceTemplateName(nameTemplate, chunk.name.slice(0, -2))
             }
+
+            // Try replacing [name] with name without .d suffix, then convert js->dts
+            // This handles both template strings (e.g. '[name].mjs') and fixed strings
+            // (e.g. 'index.mjs' from Vite's lib mode)
+            const renderedNameWithoutD = filename_js_to_dts(
+              replaceTemplateName(nameTemplate, chunk.name.slice(0, -2)),
+            )
+            if (RE_DTS.test(renderedNameWithoutD)) {
+              return renderedNameWithoutD
+            }
+
             if (RE_JS.test(nameTemplate)) {
               return nameTemplate.replace(RE_JS, '.$1ts')
             }
